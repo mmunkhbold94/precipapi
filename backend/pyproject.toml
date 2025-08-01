@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "precipapi-backend"
+name = "precipapi"
 version = "0.1.0"
 description = "FastAPI backend for PrecipAPI, a precipitation data API"
 authors = [
@@ -64,7 +64,7 @@ ignore = [
 ]
 
 [tool.ruff.format]
-docstring-code-format = true
+# docstring-code-format opetion was removed in newer ruff versions
 
 [tool.ruff.lint.isort]
 known-first-party = ["app"]

@@ -11,9 +11,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 @app.get("/")
 async def root():
     return {"message": "Welcome to PrecipAPI!"}
+
 
 @app.get("/health")
 async def health_check():

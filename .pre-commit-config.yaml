@@ -1,0 +1,31 @@
+# Pre-commit hooks for PrecipAPI monorepo
+repos:
+  # General hooks for all files
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.4.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-json
+      - id: check-merge-conflict
+      - id: check-added-large-files
+
+  - repo: local
+    hooks:
+      # Python backend formatting and linting
+      - id: ruff-check
+        name: ruff check --fix (backend)
+        language: python
+        additional_dependencies: [ruff]
+        entry: ruff check --fix
+        types: [python]
+        files: ^backend/
+
+      - id: ruff-format
+        name: ruff format (backend)
+        language: python
+        additional_dependencies: [ruff]
+        entry: ruff format
+        types: [python]
+        files: ^backend/

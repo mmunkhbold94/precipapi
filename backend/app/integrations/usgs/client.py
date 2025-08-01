@@ -1,24 +1,34 @@
 """USGS Water Services API client."""
-from typing import Any
+
 from datetime import datetime
+from typing import Any
+
 import httpx
 
 
 class USGSException(Exception):
     """Base exception for USGS API errors."""
+
     pass
+
 
 class USGSTimeoutError(USGSException):
     """Exception raised for timeout errors."""
+
     pass
+
 
 class USGSNotFoundError(USGSException):
     """Exception raised when a resource is not found."""
+
     pass
+
 
 class USGSServerError(USGSException):
     """Exception raised for server errors."""
+
     pass
+
 
 class USGSClient:
     """Client for interacting with the USGS Water Services API."""
@@ -120,7 +130,7 @@ class USGSClient:
             longitude=longitude,
             radius_miles=radius_miles,
             parameter_codes=["00060"],  # Streamflow parameter code
-            site_types=["ST"] # Stream sites only
+            site_types=["ST"],  # Stream sites only
         )
 
     # Data Retrieval Methods
@@ -206,7 +216,9 @@ class USGSClient:
         Need to improve this by using libs like geopy.
         """
         lat_delta = radius_miles / 69.0  # Roughly 69 miles per degree latitude
-        lon_delta = radius_miles / (69.0 * abs(latitude / 90.0) if latitude != 0 else 69.0)  # Adjust for longitude based on latitude
+        lon_delta = radius_miles / (
+            69.0 * abs(latitude / 90.0) if latitude != 0 else 69.0
+        )  # Adjust for longitude based on latitude
 
         # Bounding box format: west, south, east, north
         west = longitude - lon_delta
