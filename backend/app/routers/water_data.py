@@ -12,11 +12,16 @@ PRECIP_PERIOD_QUERY = Query(
     description="Time period for data retrieval (e.g., P7D for last 7 days)",
 )
 
+STREAM_PERIOD_QUERY = Query(
+    USGSDefaults.DEFAULT_PERIOD,
+    description="Time period for data retrieval (e.g., P7D for last 7 days)",
+)
+
 
 @router.get("/streamflow/{site_no}")
 async def get_streamflow_data(
     site_no: str,
-    period: PRECIP_PERIOD_QUERY,
+    period: USGSTimePeriod = STREAM_PERIOD_QUERY,
 ):
     """Get streamflow data for a specific USGS site."""
     try:
