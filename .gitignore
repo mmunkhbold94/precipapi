@@ -184,3 +184,4 @@ node_modules/
 # .env files which may include secrets
 gotest.env
 dd-agent.env
+.ruff_cache/
