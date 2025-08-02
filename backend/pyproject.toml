@@ -86,3 +86,12 @@ python_version = "3.11"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
+
+[tool.hatch.envs.default]
+# install the project itself
+dependencies = ["project"]
+# pull in your optional dev deps too
+optional-dependencies = ["dev"]
+
+[tool.hatch.envs.default.scripts]
+test = "pytest"

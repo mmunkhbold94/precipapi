@@ -1,9 +1,18 @@
 """USGS Water Services API client."""
 
+import math
 from datetime import datetime
 from typing import Any
 
 import httpx
+
+from .models import (
+    PrecipitationMeasurement,
+    StreamflowMeasurement,
+    USGSDefaults,
+    USGSInstantaneousValuesResponse,
+    USGSParameterCode,
+)
 
 
 class USGSException(Exception):
@@ -35,7 +44,7 @@ class USGSClient:
 
     BASE_URL = "https://waterservices.usgs.gov/nwis"
 
-    def __init__(self, timeout: int = 30):
+    def __init__(self, timeout: int = USGSDefaults.DEFAULT_TIMEOUT):
         self.timeout = timeout
         self._client = None
 
@@ -81,58 +90,6 @@ class USGSClient:
         except Exception as e:
             raise USGSException(f"Invalid JSON response: {url}") from e
 
-    async def find_stations_by_location(
-        self,
-        latitude: float,
-        longitude: float,
-        radius_miles: float = 10.0,
-        parameter_codes: list[str] | None = None,
-        site_types: list[str] | None = None,
-    ) -> dict[str, Any]:
-        """Find USGS stations within a radius of a lat/lon point."""
-        params = {
-            "format": "json",
-            "bBox": self._calculate_bounding_box(latitude, longitude, radius_miles),
-            "siteStatus": "all",
-        }
-
-        if parameter_codes:
-            params["parameterCd"] = ",".join(parameter_codes)
-
-        if site_types:
-            params["siteType"] = ",".join(site_types)
-
-        return await self._request_json("/sites", params=params)
-
-    async def find_precipitation_stations(
-        self,
-        latitude: float,
-        longitude: float,
-        radius_miles: float = 10.0,
-    ) -> dict[str, Any]:
-        """Find precipitation monitoring stations near a location."""
-        return await self.find_stations_by_location(
-            latitude=latitude,
-            longitude=longitude,
-            radius_miles=radius_miles,
-            parameter_codes=["00045"],  # Precipitation parameter code
-        )
-
-    async def find_streamflow_stations(
-        self,
-        latitude: float,
-        longitude: float,
-        radius_miles: float = 10.0,
-    ) -> dict[str, Any]:
-        """Find streamflow monitoring stations near a location."""
-        return await self.find_stations_by_location(
-            latitude=latitude,
-            longitude=longitude,
-            radius_miles=radius_miles,
-            parameter_codes=["00060"],  # Streamflow parameter code
-            site_types=["ST"],  # Stream sites only
-        )
-
     # Data Retrieval Methods
     async def get_instantaneous_values(
         self,
@@ -141,7 +98,7 @@ class USGSClient:
         start_date: datetime | None = None,
         end_date: datetime | None = None,
         period: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> USGSInstantaneousValuesResponse:
         """Get instantaneous values for specified sites and parameters."""
         params = {
             "format": "json",
@@ -156,53 +113,88 @@ class USGSClient:
             params["endDT"] = end_date.strftime("%Y-%m-%dT%H:%M")
         else:
             # Default to last 7 dats if no time specified
-            params["period"] = "P7D"
+            params["period"] = str(USGSDefaults.DEFAULT_PERIOD)
 
-        return await self._request_json("/iv/", params=params)
+        response_data = await self._request_json("/iv/", params=params)
+        return USGSInstantaneousValuesResponse(**response_data)
 
     async def get_precipitation_data(
         self,
         site_codes: list[str],
         start_date: datetime | None = None,
         end_date: datetime | None = None,
-        period: str = "P7D",
-    ) -> dict[str, Any]:
+        period: str = USGSDefaults.DEFAULT_PERIOD,
+    ) -> list[PrecipitationMeasurement]:
         """Get instantaneous precipitation data for specified sites."""
-        return await self.get_instantaneous_values(
+        response = await self.get_instantaneous_values(
             site_codes=site_codes,
-            parameter_codes=["00045"],  # Precipitation parameter code
+            parameter_codes=[
+                USGSParameterCode.PRECIPITATION
+            ],  # Precipitation parameter code
             start_date=start_date,
             end_date=end_date,
             period=period,
         )
+        measurements = []
+        for time_series in response.time_series:
+            site_info = time_series.source_info
+            variable_info = time_series.variable
+
+            unit = variable_info.unit_abbreviation
+
+            for value_group in time_series.values:
+                if "value" in value_group:
+                    for value_data in value_group["value"]:
+                        measurement = PrecipitationMeasurement(
+                            site_no=site_info.site_no,
+                            site_name=site_info.site_name,
+                            latitude=site_info.latitude,
+                            longitude=site_info.longitude,
+                            value=value_data.get("value"),
+                            unit=unit,
+                            timestamp=value_data.get("dateTime"),
+                            qualifiers=value_data.get("qualifiers", []),
+                        )
+                        measurements.append(measurement)
+        return measurements
 
     async def get_streamflow_data(
         self,
         site_codes: list[str],
         start_date: datetime | None = None,
         end_date: datetime | None = None,
-        period: str = "P7D",
-    ) -> dict[str, Any]:
+        period: str = USGSDefaults.DEFAULT_PERIOD,
+    ) -> list[StreamflowMeasurement]:
         """Get instantaneous streamflow data for specified sites."""
-        return await self.get_instantaneous_values(
+        response = await self.get_instantaneous_values(
             site_codes=site_codes,
-            parameter_codes=["00060"],  # Streamflow parameter code
+            parameter_codes=[USGSParameterCode.STREAMFLOW],  # Streamflow parameter code
             start_date=start_date,
             end_date=end_date,
             period=period,
         )
+        measurements = []
+        for time_series in response.time_series:
+            site_info = time_series.source_info
+            variable_info = time_series.variable
 
-    async def get_site_info(
-        self,
-        site_codes: list[str],
-    ) -> dict[str, Any]:
-        """Get detailed information for specified sites."""
-        params = {
-            "format": "json",
-            "sites": ",".join(site_codes),
-            "siteOutput": "expanded",
-        }
-        return await self._request_json("/site/", params=params)
+            unit = variable_info.unit_abbreviation
+
+            for value_group in time_series.values:
+                if "value" in value_group:
+                    for value_data in value_group["value"]:
+                        measurement = StreamflowMeasurement(
+                            site_no=site_info.site_no,
+                            site_name=site_info.site_name,
+                            latitude=site_info.latitude,
+                            longitude=site_info.longitude,
+                            value=value_data.get("value"),
+                            unit=unit,
+                            timestamp=value_data.get("dateTime"),
+                            qualifiers=value_data.get("qualifiers", []),
+                        )
+                        measurements.append(measurement)
+        return measurements
 
     def _calculate_bounding_box(
         self,
@@ -227,3 +219,26 @@ class USGSClient:
         north = latitude + lat_delta
 
         return f"{west},{south},{east},{north}"
+
+    def _calculate_distance(
+        self,
+        lat1: float,
+        lon1: float,
+        lat2: float,
+        lon2: float,
+    ) -> float:
+        """Calculate the distance between two points on the Earth's surface."""
+        lat1, lon1, lat2, lon2 = map(math.radians, [lat1, lon1, lat2, lon2])
+
+        dlat = lat2 - lat1
+        dlon = lon2 - lon1
+
+        a = (
+            math.sin(dlat / 2) ** 2
+            + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
+        )
+        c = 2 * math.asin(math.sqrt(a))
+
+        r = 3956
+
+        return c * r
