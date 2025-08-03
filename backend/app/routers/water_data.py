@@ -27,7 +27,7 @@ async def get_streamflow_data(
     try:
         async with USGSClient() as client:
             measurements = await client.get_streamflow_data(
-                site_codes=[site_no], period=period
+                site_codes=[site_no], period=period.value
             )
         return {
             "site_no": site_no,
@@ -39,7 +39,7 @@ async def get_streamflow_data(
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Error fetching streamflow data for site {site_no}: (e)",
+            detail=f"Error fetching streamflow data for site {site_no}: {e!s}",
         ) from e
 
 
@@ -52,7 +52,7 @@ async def get_precipitation_data(
     try:
         async with USGSClient() as client:
             measurements = await client.get_precipitation_data(
-                site_codes=[site_no], period=period
+                site_codes=[site_no], period=period.value
             )
 
         return {
@@ -76,7 +76,7 @@ async def get_latest_streamflow(site_no: str):
     try:
         async with USGSClient() as client:
             measurements = await client.get_streamflow_data(
-                site_codes=[site_no], period=USGSTimePeriod.LAST_DAY
+                site_codes=[site_no], period=USGSTimePeriod.LAST_DAY.value
             )
 
         if not measurements:
@@ -107,7 +107,7 @@ async def get_latest_precipitation(site_no: str):
     try:
         async with USGSClient() as client:
             measurements = await client.get_precipitation_data(
-                site_codes=[site_no], period=USGSTimePeriod.LAST_DAY
+                site_codes=[site_no], period=USGSTimePeriod.LAST_DAY.value
             )
 
         if not measurements:
@@ -142,7 +142,7 @@ async def get_available_parameters(site_no: str):
             # Test streamflow
             try:
                 streamflow_data = await client.get_streamflow_data(
-                    site_codes=[site_no], period=USGSTimePeriod.LAST_DAY
+                    site_codes=[site_no], period=USGSTimePeriod.LAST_DAY.value
                 )
                 results["streamflow"] = {
                     "available": len(streamflow_data) > 0,
@@ -157,7 +157,7 @@ async def get_available_parameters(site_no: str):
             # Test precipitation
             try:
                 precip_data = await client.get_precipitation_data(
-                    site_codes=[site_no], period=USGSTimePeriod.LAST_DAY
+                    site_codes=[site_no], period=USGSTimePeriod.LAST_DAY.value
                 )
                 results["precipitation"] = {
                     "available": len(precip_data) > 0,
