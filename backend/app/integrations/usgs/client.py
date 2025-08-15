@@ -109,12 +109,7 @@ class USGSClient:
             self._client = httpx.AsyncClient(timeout=self.timeout)
 
         url = f"{self.BASE_URL}{endpoint}"
-        import urllib.parse
 
-        if params:
-            query_string = urllib.parse.urlencode(params)
-            full_url = f"{url}?{query_string}"
-            print(f"DEBUG: Requesting URL: {full_url}")
         try:
             response = await self._client.get(url, params=params)
         except httpx.TimeoutException:
@@ -125,7 +120,6 @@ class USGSClient:
         elif response.status_code >= 500:
             raise USGSServerError(f"Server error {response.status_code}: {url}")
         elif response.status_code >= 400:
-            print(f"DEBUG: Response text: {response.text[:500]}")
             raise USGSException(f"Client error {response.status_code}: {url}")
 
         return response.text
