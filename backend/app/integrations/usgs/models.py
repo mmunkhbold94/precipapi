@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, ClassVar
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 
 
 class USGSTimeZone(BaseModel):
@@ -157,7 +157,8 @@ class USGSValue(BaseModel):
     qualifiers: list[str]
     date_time: datetime = Field(alias="dateTime")
 
-    @validator("date_time", pre=True)
+    @field_validator("date_time", mode="before")
+    @classmethod
     def parse_datetime(cls, v):
         if isinstance(v, str):
             # Handle USGS datetime format
@@ -251,7 +252,8 @@ class PrecipitationMeasurement(BaseModel):
     timestamp: datetime
     qualifiers: list[str]
 
-    @validator("value", pre=True)
+    @field_validator("value", mode="before")
+    @classmethod
     def parse_value(cls, v):
         if v is None or v == "":
             return None
@@ -273,7 +275,8 @@ class StreamflowMeasurement(BaseModel):
     timestamp: datetime
     qualifiers: list[str]
 
-    @validator("value", pre=True)
+    @field_validator("value", mode="before")
+    @classmethod
     def parse_value(cls, v):
         if v is None or v == "":
             return None
@@ -328,17 +331,17 @@ class USGSParameterCode(str, Enum):
     def get_description(cls, code: str) -> str:
         """Get human-readable description for a parameter code."""
         descriptions = {
-            cls.STREAMFLOW: "Streamflow (Discharge, cubic feet per second)",
-            cls.GAGE_HEIGHT: "Gage Height (feet)",
-            cls.PRECIPITATION: "Precipitation (total, inches)",
-            cls.PRECIPITATION_ACCUMULATED: "Precipitation (accumulated, inches)",
-            cls.TEMPERATURE_WATER: "Water Temperature (degrees Celsius)",
-            cls.TEMPERATURE_AIR: "Air Temperature (degrees Celsius)",
-            cls.PH: "pH (standard units)",
-            cls.DISSOLVED_OXYGEN: "Dissolved Oxygen (mg/L)",
-            cls.TURBIDITY: "Turbidity (FNU)",
-            cls.VELOCITY: "Stream Velocity (feet per second)",
-            cls.RESERVOIR_STORAGE: "Reservoir Storage (acre-feet)",
+            cls.STREAMFLOW.value: "Streamflow (Discharge, cubic feet per second)",
+            cls.GAGE_HEIGHT.value: "Gage Height (feet)",
+            cls.PRECIPITATION.value: "Precipitation (total, inches)",
+            cls.PRECIPITATION_ACCUMULATED.value: "Precipitation (accumulated, inches)",
+            cls.TEMPERATURE_WATER.value: "Water Temperature (degrees Celsius)",
+            cls.TEMPERATURE_AIR.value: "Air Temperature (degrees Celsius)",
+            cls.PH.value: "pH (standard units)",
+            cls.DISSOLVED_OXYGEN.value: "Dissolved Oxygen (mg/L)",
+            cls.TURBIDITY.value: "Turbidity (FNU)",
+            cls.VELOCITY.value: "Stream Velocity (feet per second)",
+            cls.RESERVOIR_STORAGE.value: "Reservoir Storage (acre-feet)",
         }
         return descriptions.get(code, f"Unknown parameter: {code}")
 
@@ -371,19 +374,19 @@ class USGSTimePeriod(str, Enum):
     def get_description(cls, period: str) -> str:
         """Get human-readable description for a time period."""
         descriptions = {
-            cls.LAST_HOUR: "Last hour",
-            cls.LAST_6_HOURS: "Last 6 hours",
-            cls.LAST_12_HOURS: "Last 12 hours",
-            cls.LAST_DAY: "Last day",
-            cls.LAST_2_DAYS: "Last 2 days",
-            cls.LAST_3_DAYS: "Last 3 days",
-            cls.LAST_WEEK: "Last week",
-            cls.LAST_14_DAYS: "Last 14 days",
-            cls.LAST_MONTH: "Last month",
-            cls.LAST_3_MONTHS: "Last 3 months",
-            cls.LAST_6_MONTHS: "Last 6 months",
-            cls.LAST_YEAR: "Last year",
-            cls.LAST_2_YEARS: "Last 2 years",
+            cls.LAST_HOUR.value: "Last hour",
+            cls.LAST_6_HOURS.value: "Last 6 hours",
+            cls.LAST_12_HOURS.value: "Last 12 hours",
+            cls.LAST_DAY.value: "Last day",
+            cls.LAST_2_DAYS.value: "Last 2 days",
+            cls.LAST_3_DAYS.value: "Last 3 days",
+            cls.LAST_WEEK.value: "Last week",
+            cls.LAST_14_DAYS.value: "Last 14 days",
+            cls.LAST_MONTH.value: "Last month",
+            cls.LAST_3_MONTHS.value: "Last 3 months",
+            cls.LAST_6_MONTHS.value: "Last 6 months",
+            cls.LAST_YEAR.value: "Last year",
+            cls.LAST_2_YEARS.value: "Last 2 years",
         }
         return descriptions.get(period, f"Custom period: {period}")
 
@@ -407,17 +410,17 @@ class USGSSiteType(str, Enum):
     def get_description(cls, site_type: str) -> str:
         """Get human-readable description for a site type."""
         descriptions = {
-            cls.STREAM: "Stream",
-            cls.LAKE: "Lake, Reservoir, Impoundment",
-            cls.WELL: "Well",
-            cls.SPRING: "Spring",
-            cls.ESTUARY: "Estuary",
-            cls.OCEAN: "Ocean",
-            cls.PRECIPITATION: "Precipitation",
-            cls.LAND: "Land",
-            cls.AGGREGATE_GROUNDWATER_USE: "Aggregate groundwater use",
-            cls.AGGREGATE_SURFACE_WATER_USE: "Aggregate surface-water-use",
-            cls.ATMOSPHERIC: "Atmospheric",
+            cls.STREAM.value: "Stream",
+            cls.LAKE.value: "Lake, Reservoir, Impoundment",
+            cls.WELL.value: "Well",
+            cls.SPRING.value: "Spring",
+            cls.ESTUARY.value: "Estuary",
+            cls.OCEAN.value: "Ocean",
+            cls.PRECIPITATION.value: "Precipitation",
+            cls.LAND.value: "Land",
+            cls.AGGREGATE_GROUNDWATER_USE.value: "Aggregate groundwater use",
+            cls.AGGREGATE_SURFACE_WATER_USE.value: "Aggregate surface-water-use",
+            cls.ATMOSPHERIC.value: "Atmospheric",
         }
         return descriptions.get(site_type, f"Unknown site type: {site_type}")
 
