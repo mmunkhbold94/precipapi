@@ -1,10 +1,15 @@
 """USGS Water Services API client."""
 
+import asyncio
+import contextlib
 import math
 from datetime import datetime
+from functools import partial
 from typing import Any
 
 import httpx
+from geopy.distance import geodesic
+from geopy.geocoders import Nominatim
 
 from .models import (
     PrecipitationMeasurement,
@@ -12,6 +17,7 @@ from .models import (
     USGSDefaults,
     USGSInstantaneousValuesResponse,
     USGSParameterCode,
+    USGSStationSummary,
 )
 
 
@@ -89,6 +95,34 @@ class USGSClient:
             return response.json()
         except Exception as e:
             raise USGSException(f"Invalid JSON response: {url}") from e
+
+    async def _request_text(
+        self,
+        endpoint: str,
+        params: dict | None = None,
+    ) -> str:
+        """Make a text request to the USGS API."""
+        if params is None:
+            params = {}
+
+        if self._client is None:
+            self._client = httpx.AsyncClient(timeout=self.timeout)
+
+        url = f"{self.BASE_URL}{endpoint}"
+
+        try:
+            response = await self._client.get(url, params=params)
+        except httpx.TimeoutException:
+            raise USGSTimeoutError(f"Timeout {self.timeout}s: {url}") from None
+
+        if response.status_code == 404:
+            raise USGSNotFoundError(f"Resource not found: {url}")
+        elif response.status_code >= 500:
+            raise USGSServerError(f"Server error {response.status_code}: {url}")
+        elif response.status_code >= 400:
+            raise USGSException(f"Client error {response.status_code}: {url}")
+
+        return response.text
 
     # Data Retrieval Methods
     async def get_instantaneous_values(
@@ -196,6 +230,67 @@ class USGSClient:
                         measurements.append(measurement)
         return measurements
 
+    async def get_sites_by_coordinates(
+        self,
+        latitude: float,
+        longitude: float,
+        radius_miles: float = 50,
+        site_type: str | None = None,
+        has_data_type_cd: str | None = None,
+    ) -> list[USGSStationSummary]:
+        """Set sites based on geographic coordinates."""
+        params = {
+            "format": "rdb",  # Site Service API has RDB (tab-delimited) format
+            "lat": str(latitude),
+            "long": str(longitude),
+            "radius": str(radius_miles),
+            "siteOutput": "expanded",
+        }
+        if site_type:
+            params["siteType"] = site_type
+        if has_data_type_cd:
+            params["hasDataTypeCd"] = has_data_type_cd
+
+        response_text = await self._request_text("/site/", params=params)
+
+        stations = self._parse_rdb_sites_response(response_text, latitude, longitude)
+
+        return stations
+
+    async def get_sites_by_address(
+        self,
+        address: str,
+        radius_miles: float = 50,
+        site_type: str | None = None,
+        has_data_type_cd: str | None = None,
+    ) -> tuple[dict, list[USGSStationSummary]]:
+        """Get sites based on an address."""
+        geolocator = Nominatim(user_agent="usgs_water_api")
+        loop = asyncio.get_running_loop()
+        location: Any = await loop.run_in_executor(
+            None, partial(geolocator.geocode, address)
+        )
+
+        if not location:
+            raise USGSException(f"Address not found: {address}")
+
+        location_info = {
+            "address": address,
+            "resolved_address": location.address,
+            "latitude": location.latitude,
+            "longitude": location.longitude,
+        }
+
+        stations = await self.get_sites_by_coordinates(
+            latitude=location.latitude,
+            longitude=location.longitude,
+            radius_miles=radius_miles,
+            site_type=site_type,
+            has_data_type_cd=has_data_type_cd,
+        )
+
+        return location_info, stations
+
     def _calculate_bounding_box(
         self,
         latitude: float,
@@ -242,3 +337,86 @@ class USGSClient:
         r = 3956
 
         return c * r
+
+    def _parse_rdb_sites_response(
+        self,
+        rdb_text: str,
+        search_lat: float,
+        search_lon: float,
+    ) -> list[USGSStationSummary]:
+        """Parse the RDB response from the USGS Site Service API."""
+        stations = []
+        lines = rdb_text.strip().split("\n")
+
+        header_idx = None
+        for i, line in enumerate(lines):
+            if not line.startswith("#") and line.strip():
+                header_idx = i
+                break
+
+        if header_idx is None:
+            return stations
+
+        headers = lines[header_idx].split("\t")
+
+        data_start_idx = header_idx + 2
+
+        for line in lines[data_start_idx:]:
+            if not line.strip() or line.startswith("#"):
+                continue
+
+            fields = line.split("\t")
+
+            site_data = {}
+            for i, header in enumerate(headers):
+                if i < len(fields):
+                    site_data[header] = fields[i].strip()
+
+            site_no = site_data.get("site_no", "")
+            site_name = site_data.get("station_nm", "")
+            site_type = site_data.get("site_tp_cd", "")
+
+            try:
+                lat_str = site_data.get("dec_lat_va", "0")
+                lon_str = site_data.get("dec_long_va", "0")
+                lat = float(lat_str) if lat_str else 0
+                lon = float(lon_str) if lon_str else 0
+            except (ValueError, TypeError):
+                continue
+
+            if lat == 0 or lon == 0:
+                continue
+
+            distance_miles = None
+            if lat and lon:
+                distance_miles = geodesic((search_lat, search_lon), (lat, lon)).miles
+
+            state_cd = site_data.get("state_cd")
+            county_cd = site_data.get("county_cd")
+            huc_cd = site_data.get("huc_cd")
+            elevation_ft = None
+            elev_str = site_data.get("alt_va", "")
+            if elev_str and elev_str != "":
+                with contextlib.suppress(ValueError, TypeError):
+                    elevation_ft = float(elev_str)
+                    pass
+
+            station = USGSStationSummary(
+                site_no=site_no,
+                site_name=site_name,
+                site_type=site_type,
+                latitude=lat,
+                longitude=lon,
+                state_cd=state_cd,
+                county_cd=county_cd,
+                huc_cd=huc_cd,
+                elevation_ft=elevation_ft,
+                available_parameters=[],
+                distance_miles=distance_miles,
+            )
+
+            if site_no:
+                stations.append(station)
+
+        stations.sort(key=lambda s: s.distance_miles or float("inf"))
+        return stations
