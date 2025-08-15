@@ -10,9 +10,6 @@ authors = [
     {name = "Muugii Munkhbold", email = "mmunkhbold94@gmail.com"},
 ]
 requires-python = ">= 3.11, < 3.13"
-
-[tool.hatch.build.targets.wheel]
-packages = ["app"]
 dependencies = [
     "fastapi>=0.104.0",
     "uvicorn[standard]>=0.24.0",
@@ -26,6 +23,9 @@ dependencies = [
     "httpx>=0.25.0",  # for making API calls to NOAA/USGS
     "geopy>=2.4.0",   # for geocoding
 ]
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
 
 [project.optional-dependencies]
 dev = [
@@ -76,6 +76,10 @@ addopts = [
     "-v",
 ]
 testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = [
+    "asyncio: mark test as asyncio"
+]
 
 [tool.black]
 line-length = 88
@@ -88,10 +92,23 @@ warn_unused_configs = true
 disallow_untyped_defs = true
 
 [tool.hatch.envs.default]
-# install the project itself
-dependencies = ["project"]
-# pull in your optional dev deps too
-optional-dependencies = ["dev"]
+dependencies = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "httpx>=0.25.0",
+    "pytest-mock>=3.12.0",
+]
+
+[tool.hatch.envs.test]
+dependencies = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "httpx>=0.25.0",
+    "pytest-mock>=3.12.0",
+]
 
 [tool.hatch.envs.default.scripts]
-test = "pytest"
+test = "pytest {args:tests}"
+lint = "ruff check {args:.}"
+format = "ruff format {args:.}"
+typecheck = "mypy {args:app tests}"
