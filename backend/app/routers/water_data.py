@@ -179,3 +179,88 @@ async def get_available_parameters(site_no: str):
             status_code=500,
             detail=f"Error checking parameters for site {site_no}: {e!s}",
         ) from e
+
+
+@router.get("/stations/search")
+async def search_stations_by_address(
+    address: str = Query(..., description="Address to search for USGS stations"),
+    radius_miles: float = Query(50, description="Search radius in miles"),
+    site_type: str | None = Query(
+        None, description="Type of site filter (ST=stream, GW=groundwater, etc.)"
+    ),
+    limit: int = Query(50, description="Maximum number of results to return"),
+):
+    """Search for USGS stations by address."""
+    try:
+        async with USGSClient() as client:
+            location_info, stations = await client.get_sites_by_address(
+                address=address,
+                radius_miles=radius_miles,
+                site_type=site_type,
+                has_data_type_cd="iv",
+            )
+        limited_stations = stations[:limit]
+
+        return {
+            "location": location_info,
+            "search_parameters": {
+                "address": address,
+                "radius_miles": radius_miles,
+                "site_type": site_type,
+                "limit": limit,
+            },
+            "stations": [stations.dict() for stations in limited_stations],
+            "count": len(limited_stations),
+            "total_count": len(stations),
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error searching for stations by address '{address}': {e!s}",
+        ) from None
+
+
+@router.get("/stations/coordinates")
+async def search_stations_by_coordinates(
+    latitude: float = Query(..., description="Latitude"),
+    longitude: float = Query(..., description="Longitude"),
+    radius_miles: float = Query(50, description="Search radius in miles"),
+    site_type: str | None = Query(None, description="Site type filter"),
+    limit: int = Query(50, description="Maximum number of stations to return"),
+):
+    """Find USGS monitoring stations near coordinates."""
+    try:
+        async with USGSClient() as client:
+            stations = await client.get_sites_by_coordinates(
+                latitude=latitude,
+                longitude=longitude,
+                radius_miles=radius_miles,
+                site_type=site_type,
+                has_data_type_cd="iv",
+            )
+
+        # Limit results
+        limited_stations = stations[:limit]
+
+        return {
+            "location": {
+                "latitude": latitude,
+                "longitude": longitude,
+            },
+            "search_parameters": {
+                "radius_miles": radius_miles,
+                "site_type": site_type,
+                "limit": limit,
+            },
+            "stations": [station.dict() for station in limited_stations],
+            "count": len(limited_stations),
+            "total_found": len(stations),
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error searching for stations: {e!s}",
+        ) from None
