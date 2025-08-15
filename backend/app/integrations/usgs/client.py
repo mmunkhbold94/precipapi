@@ -109,7 +109,12 @@ class USGSClient:
             self._client = httpx.AsyncClient(timeout=self.timeout)
 
         url = f"{self.BASE_URL}{endpoint}"
+        import urllib.parse
 
+        if params:
+            query_string = urllib.parse.urlencode(params)
+            full_url = f"{url}?{query_string}"
+            print(f"DEBUG: Requesting URL: {full_url}")
         try:
             response = await self._client.get(url, params=params)
         except httpx.TimeoutException:
@@ -120,6 +125,7 @@ class USGSClient:
         elif response.status_code >= 500:
             raise USGSServerError(f"Server error {response.status_code}: {url}")
         elif response.status_code >= 400:
+            print(f"DEBUG: Response text: {response.text[:500]}")
             raise USGSException(f"Client error {response.status_code}: {url}")
 
         return response.text
@@ -239,11 +245,22 @@ class USGSClient:
         has_data_type_cd: str | None = None,
     ) -> list[USGSStationSummary]:
         """Set sites based on geographic coordinates."""
+        # USGS Site Service uses bounding box, not lat/long + radius
+        # Calculate bounding box from center point and radius
+        # Rough conversion: 1 degree latitude ≈ 69 miles
+        lat_delta = radius_miles / 69.0
+        # Longitude degrees vary with latitude, but this is a reasonable approximation
+        lon_delta = radius_miles / (69.0 * abs(math.cos(math.radians(latitude))))
+
+        # Bounding box format: west,south,east,north
+        # Round to 7 decimal places as required by USGS API
+        west = round(longitude - lon_delta, 7)
+        south = round(latitude - lat_delta, 7)
+        east = round(longitude + lon_delta, 7)
+        north = round(latitude + lat_delta, 7)
         params = {
             "format": "rdb",  # Site Service API has RDB (tab-delimited) format
-            "lat": str(latitude),
-            "long": str(longitude),
-            "radius": str(radius_miles),
+            "bBox": f"{west},{south},{east},{north}",
             "siteOutput": "expanded",
         }
         if site_type:
@@ -254,8 +271,16 @@ class USGSClient:
         response_text = await self._request_text("/site/", params=params)
 
         stations = self._parse_rdb_sites_response(response_text, latitude, longitude)
+        # Filter by actual distance since bounding box is rectangular
+        filtered_stations = []
+        for station in stations:
+            if (
+                station.distance_miles is not None
+                and station.distance_miles <= radius_miles
+            ):
+                filtered_stations.append(station)
 
-        return stations
+        return filtered_stations
 
     async def get_sites_by_address(
         self,
