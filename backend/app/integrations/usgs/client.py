@@ -8,8 +8,16 @@ from functools import partial
 from typing import Any
 
 import httpx
+import requests.auth
 from geopy.distance import geodesic
 from geopy.geocoders import Nominatim
+from requests import Session
+
+from app.base import DataSourceConnector
+from app.models.exceptions import DataSourceError, StationNotFound
+from app.models.models import DataSource, ParameterType, Station, TimeInterval
+from app.models.models import PrecipitationMeasurement as StandardPrecipMeasurement
+from app.models.models import StreamflowMeasurement as StandardStreamflowMeasurement
 
 from .models import (
     PrecipitationMeasurement,
@@ -17,7 +25,9 @@ from .models import (
     USGSDefaults,
     USGSInstantaneousValuesResponse,
     USGSParameterCode,
+    USGSSiteType,
     USGSStationSummary,
+    USGSTimePeriod,
 )
 
 
@@ -439,3 +449,367 @@ class USGSClient:
 
         stations.sort(key=lambda s: s.distance_miles or float("inf"))
         return stations
+
+
+class USGSConnector(DataSourceConnector):
+    """USGS Water Services API connector implementing standardized interface."""
+
+    @classmethod
+    def name(cls) -> str:
+        """Return canonical name for USGS data source."""
+        return "usgs"
+
+    @classmethod
+    def init_from_request_context(cls, **kwargs: Any) -> "USGSConnector":
+        """Initialize from request context."""
+        return cls(
+            timeout=kwargs.get("timeout", 30),
+            session=kwargs.get("session"),
+            auth=kwargs.get("auth"),
+        )
+
+    def __init__(
+        self,
+        auth: requests.auth.AuthBase | None = None,
+        session: Session | None = None,
+        timeout: int = 30,
+        **kwargs,
+    ) -> None:
+        """Initialize USGS connector."""
+        super().__init__(auth, session)
+        self.timeout = timeout
+        self._client = None
+
+    async def _get_client(self) -> USGSClient:
+        """Get or create USGS client."""
+        if self._client is None:
+            self._client = USGSClient(timeout=self.timeout)
+        return self._client
+
+    # STATION DISCOVERY
+
+    async def find_stations_by_coordinates(
+        self,
+        latitude: float,
+        longitude: float,
+        radius_miles: float,
+        parameter_types: list[ParameterType] | None = None,
+    ) -> list[Station]:
+        """Find USGS stations by coordinates."""
+        try:
+            client = await self._get_client()
+
+            async with client as usgs:
+                # Convert parameter types to USGS site types if needed
+                site_type = self._parameter_types_to_site_type(parameter_types)
+
+                usgs_stations = await usgs.get_sites_by_coordinates(
+                    latitude=latitude,
+                    longitude=longitude,
+                    radius_miles=radius_miles,
+                    site_type=site_type,
+                )
+
+            # Convert to standardized Station objects
+            stations = []
+            for usgs_station in usgs_stations:
+                # Add available parameters by querying what data exists
+                usgs_station.available_parameters = (
+                    await self._get_available_parameters(usgs_station.site_no)
+                )
+                station = self._convert_usgs_station_to_station(usgs_station)
+                stations.append(station)
+
+            return stations
+
+        except USGSException as e:
+            raise DataSourceError(f"USGS API error: {e}") from e
+        except Exception as e:
+            raise DataSourceError(f"Unexpected USGS error: {e}") from e
+
+    async def find_stations_by_address(
+        self,
+        address: str,
+        radius_miles: float,
+        parameter_types: list[ParameterType] | None = None,
+    ) -> list[Station]:
+        """Find USGS stations by address."""
+        try:
+            client = await self._get_client()
+
+            async with client as usgs:
+                site_type = self._parameter_types_to_site_type(parameter_types)
+
+                location_info, usgs_stations = await usgs.get_sites_by_address(
+                    address=address,
+                    radius_miles=radius_miles,
+                    site_type=site_type,
+                )
+
+            # Convert to standardized Station objects
+            stations = []
+            for usgs_station in usgs_stations:
+                usgs_station.available_parameters = (
+                    await self._get_available_parameters(usgs_station.site_no)
+                )
+                station = self._convert_usgs_station_to_station(usgs_station)
+                stations.append(station)
+
+            return stations
+
+        except USGSException as e:
+            raise DataSourceError(f"USGS API error: {e}") from e
+
+    async def get_station_info(self, station_id: str) -> Station:
+        """Get detailed USGS station information."""
+        try:
+            client = await self._get_client()
+
+            async with client as usgs:
+                # Get basic station info by doing a site search with specific site number
+                params = {
+                    "format": "rdb",
+                    "sites": station_id,
+                    "siteOutput": "expanded",
+                }
+                response_text = await usgs._request_text("/site/", params=params)
+                usgs_stations = usgs._parse_rdb_sites_response(response_text, 0, 0)
+
+                if not usgs_stations:
+                    raise StationNotFound(f"USGS station {station_id} not found")
+
+                usgs_station = usgs_stations[0]
+                usgs_station.available_parameters = (
+                    await self._get_available_parameters(station_id)
+                )
+
+                return self._convert_usgs_station_to_station(usgs_station)
+
+        except USGSException as e:
+            if "not found" in str(e).lower():
+                raise StationNotFound(f"USGS station {station_id} not found") from e
+            raise DataSourceError(f"USGS API error: {e}") from e
+
+    # DATA RETRIEVAL
+
+    async def get_precipitation_data(
+        self,
+        station_id: str,
+        start_date: str,
+        end_date: str,
+        interval: TimeInterval,
+    ) -> list[PrecipitationMeasurement]:
+        """Get precipitation data from USGS."""
+        try:
+            client = await self._get_client()
+
+            # Convert time interval to USGS period
+            period = self._interval_to_period(start_date, end_date, interval)
+
+            async with client as usgs:
+                usgs_measurements = await usgs.get_precipitation_data(
+                    site_codes=[station_id],
+                    period=period,
+                )
+
+            # Convert to standardized measurements
+            measurements = []
+            for usgs_measurement in usgs_measurements:
+                measurement = self._convert_usgs_precipitation_to_measurement(
+                    usgs_measurement
+                )
+                measurements.append(measurement)
+
+            return measurements
+
+        except USGSException as e:
+            raise DataSourceError(f"USGS precipitation data error: {e}") from e
+
+    async def get_streamflow_data(
+        self,
+        station_id: str,
+        start_date: str,
+        end_date: str,
+        interval: TimeInterval,
+    ) -> list[StreamflowMeasurement]:
+        """Get streamflow data from USGS."""
+        try:
+            client = await self._get_client()
+
+            period = self._interval_to_period(start_date, end_date, interval)
+
+            async with client as usgs:
+                usgs_measurements = await usgs.get_streamflow_data(
+                    site_codes=[station_id],
+                    period=period,
+                )
+
+            # Convert to standardized measurements
+            measurements = []
+            for usgs_measurement in usgs_measurements:
+                measurement = self._convert_usgs_streamflow_to_measurement(
+                    usgs_measurement
+                )
+                measurements.append(measurement)
+
+            return measurements
+
+        except USGSException as e:
+            raise DataSourceError(f"USGS streamflow data error: {e}") from e
+
+    # HELPER METHODS
+
+    def _parameter_types_to_site_type(
+        self, parameter_types: list[ParameterType] | None
+    ) -> str | None:
+        """Convert parameter types to USGS site type filter."""
+        if not parameter_types:
+            return None
+
+        # Simple mapping - you might want more sophisticated logic
+        if ParameterType.STREAMFLOW in parameter_types:
+            return USGSSiteType.STREAM.value
+        if ParameterType.PRECIPITATION in parameter_types:
+            return None  # Don't filter by site type for precipitation
+
+        return None
+
+    def _interval_to_period(
+        self, start_date: str, end_date: str, interval: TimeInterval
+    ) -> str:
+        """Convert interval and date range to USGS period string."""
+        # For now, use a simple period mapping
+        # You might want more sophisticated logic based on date range
+
+        start_dt = datetime.fromisoformat(start_date)
+        end_dt = datetime.fromisoformat(end_date)
+        delta = end_dt - start_dt
+
+        if delta.days <= 1:
+            return USGSTimePeriod.LAST_DAY.value
+        elif delta.days <= 7:
+            return USGSTimePeriod.LAST_WEEK.value
+        elif delta.days <= 30:
+            return USGSTimePeriod.LAST_MONTH.value
+        else:
+            return USGSTimePeriod.LAST_3_MONTHS.value
+
+    async def _get_available_parameters(self, station_id: str) -> list[str]:
+        """Get available parameter codes for a station."""
+        try:
+            client = await self._get_client()
+
+            # Try common parameters and see what returns data
+            available = []
+            test_parameters = [
+                USGSParameterCode.STREAMFLOW,
+                USGSParameterCode.PRECIPITATION,
+                USGSParameterCode.GAGE_HEIGHT,
+                USGSParameterCode.TEMPERATURE_WATER,
+            ]
+
+            async with client as usgs:
+                for param in test_parameters:
+                    try:
+                        response = await usgs.get_instantaneous_values(
+                            site_codes=[station_id],
+                            parameter_codes=[param.value],
+                            period="P1D",  # Just check recent data
+                        )
+                        if response.time_series:
+                            available.append(param.value)
+                    except Exception:
+                        # Parameter not available for this station
+                        continue
+
+            return available
+
+        except Exception:
+            # If we can't determine parameters, return empty list
+            return []
+
+    def _normalize_parameter_code(self, raw_code: str) -> ParameterType | None:
+        """Convert USGS parameter codes to standardized types."""
+        mapping = {
+            USGSParameterCode.PRECIPITATION.value: ParameterType.PRECIPITATION,
+            USGSParameterCode.PRECIPITATION_ACCUMULATED.value: ParameterType.PRECIPITATION,
+            USGSParameterCode.STREAMFLOW.value: ParameterType.STREAMFLOW,
+            USGSParameterCode.GAGE_HEIGHT.value: ParameterType.GAGE_HEIGHT,
+            USGSParameterCode.TEMPERATURE_WATER.value: ParameterType.TEMPERATURE_WATER,
+            USGSParameterCode.TEMPERATURE_AIR.value: ParameterType.TEMPERATURE_AIR,
+        }
+        return mapping.get(raw_code)
+
+    async def __aenter__(self):
+        """Async context manager entry."""
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Async context manager exit."""
+        if self._client and hasattr(self._client, "__aexit__"):
+            # Close the client if it has cleanup methods
+            await self._client.__aexit__(exc_type, exc_val, exc_tb)
+        # Do not call super().__aexit__ because the base class does not implement it
+
+    # CONVERSION METHODS
+
+    def _convert_usgs_station_to_station(self, usgs_station) -> Station:
+        """Convert USGSStationSummary to standardized Station."""
+        normalized_params = []
+        for param in usgs_station.available_parameters:
+            normalized_param = self._normalize_parameter_code(param)
+            if normalized_param is not None:
+                normalized_params.append(normalized_param)
+
+        return Station(
+            station_id=f"usgs:{usgs_station.site_no}",
+            source=DataSource.USGS,
+            vendor_id=usgs_station.site_no,
+            name=usgs_station.site_name,
+            site_type=usgs_station.site_type,
+            latitude=usgs_station.latitude,
+            longitude=usgs_station.longitude,
+            elevation_ft=usgs_station.elevation_ft,
+            state=usgs_station.state_cd,
+            county=usgs_station.county_cd,
+            available_parameters=normalized_params,
+            distance_miles=usgs_station.distance_miles,
+            metadata={
+                "site_type": usgs_station.site_type,
+                "state_cd": usgs_station.state_cd,
+                "county_cd": usgs_station.county_cd,
+                "huc_cd": usgs_station.huc_cd,
+            },
+        )
+
+    def _convert_usgs_precipitation_to_measurement(self, usgs_measurement):
+        """Convert USGS precipitation measurement to standardized format."""
+        return StandardPrecipMeasurement(
+            station_id=f"usgs:{usgs_measurement.site_no}",
+            source=DataSource.USGS,
+            vendor_id=usgs_measurement.site_no,
+            station_name=usgs_measurement.site_name,
+            latitude=usgs_measurement.latitude,
+            longitude=usgs_measurement.longitude,
+            timestamp=usgs_measurement.timestamp,
+            value=float(usgs_measurement.value) if usgs_measurement.value else None,
+            unit=usgs_measurement.unit,
+            quality_flags=usgs_measurement.qualifiers,
+            metadata={"usgs_qualifiers": usgs_measurement.qualifiers},
+        )
+
+    def _convert_usgs_streamflow_to_measurement(self, usgs_measurement):
+        """Convert USGS streamflow measurement to standardized format."""
+        return StandardStreamflowMeasurement(
+            station_id=f"usgs:{usgs_measurement.site_no}",
+            source=DataSource.USGS,
+            vendor_id=usgs_measurement.site_no,
+            station_name=usgs_measurement.site_name,
+            latitude=usgs_measurement.latitude,
+            longitude=usgs_measurement.longitude,
+            timestamp=usgs_measurement.timestamp,
+            value=float(usgs_measurement.value) if usgs_measurement.value else None,
+            unit=usgs_measurement.unit,
+            quality_flags=usgs_measurement.qualifiers,
+            metadata={"usgs_qualifiers": usgs_measurement.qualifiers},
+        )
