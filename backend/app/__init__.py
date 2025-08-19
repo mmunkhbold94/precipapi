@@ -86,7 +86,7 @@ class PrecipAPI:
         async def search_source(source: DataSource, connector: DataSourceConnector):
             try:
                 if request.latitude is not None and request.longitude is not None:
-                    stations = connector.find_stations_by_coordinates(
+                    stations = await connector.find_stations_by_coordinates(
                         latitude=request.latitude,
                         longitude=request.longitude,
                         radius_miles=request.radius_miles,
@@ -97,7 +97,7 @@ class PrecipAPI:
                         raise ValueError(
                             "Address must be provided for address-based station search"
                         )
-                    stations = connector.find_stations_by_address(
+                    stations = await connector.find_stations_by_address(
                         address=request.address,
                         radius_miles=request.radius_miles,
                         parameter_types=request.parameter_types,

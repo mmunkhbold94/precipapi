@@ -2,10 +2,14 @@
 
 from fastapi import APIRouter, HTTPException, Query
 
+from app import StationNotFound, create_precipapi
 from app.integrations.usgs.client import USGSClient
 from app.integrations.usgs.models import USGSDefaults, USGSTimePeriod
+from app.models.models import ParameterType
 
 router = APIRouter(prefix="/water", tags=["water-data"])
+
+DEFAULT_PERIOD = USGSDefaults.DEFAULT_PERIOD
 
 PRECIP_PERIOD_QUERY = Query(
     USGSDefaults.DEFAULT_PERIOD,
@@ -16,6 +20,105 @@ STREAM_PERIOD_QUERY = Query(
     USGSDefaults.DEFAULT_PERIOD,
     description="Time period for data retrieval (e.g., P7D for last 7 days)",
 )
+
+SOURCES_QUERY = Query(default=["usgs"], description="Data sources to search")
+
+PARAMETER_QUERY = Query(default=None, description="Filter by parameter types")
+
+## Station Discovery
+
+
+@router.get("/stations")
+async def find_stations(
+    latitude: float | None = Query(None, description="Latitude for station search"),
+    longitude: float | None = Query(None, description="Longitude coordinate"),
+    address: str | None = Query(None, description="Address to search near"),
+    radius_miles: float = Query(25, description="Search radius in miles"),
+    sources: list[str] = SOURCES_QUERY,
+    parameter_types: list[str] | None = PARAMETER_QUERY,
+    max_results: int = Query(100, description="Maximum number of results"),
+):
+    """Find USGS monitoring stations by coordinates or address."""
+    try:
+        if not latitude and not address:
+            raise HTTPException(
+                status_code=400,
+                detail="Either latitude/longitude or address must be provided.",
+            )
+        if latitude is not None and longitude is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Longitude must be provided if latitude is specified.",
+            )
+        api = await create_precipapi(sources=sources, timeout=30)
+
+        async with api:
+            if latitude is not None and longitude is not None:
+                response = await api.find_stations_by_coordinates(
+                    latitude=latitude,
+                    longitude=longitude,
+                    radius_miles=radius_miles,
+                    parameter_types=[ParameterType(pt) for pt in parameter_types]
+                    if parameter_types
+                    else None,
+                )
+            elif address:
+                response = await api.find_stations_by_address(
+                    address=address,
+                    radius_miles=radius_miles,
+                    parameter_types=[ParameterType(pt) for pt in parameter_types]
+                    if parameter_types
+                    else None,
+                )
+            else:
+                # This case should not be reached due to the initial checks
+                raise HTTPException(
+                    status_code=400, detail="Invalid request parameters."
+                )
+        limited_stations = response.stations[:max_results]
+
+        return {
+            "location": response.search_location,
+            "stations": [station.model_dump() for station in limited_stations],
+            "count": len(limited_stations),
+            "total_found": response.total_count,
+            "radius_miles": response.radius_miles,
+            "sources_searched": sources,
+            "errors": response.errors_by_source,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error finding stations: {e!s}",
+        ) from e
+
+
+@router.get("/stations/{station_id}")
+async def get_station_details(station_id: str):
+    """
+    Get detailed information about a specific station.
+    NEW: Works with unified station IDs (e.g., "usgs:01646500") and provides
+    comprehensive station information including available parameters.
+    """
+    try:
+        api = await create_precipapi(timeout=30)
+
+        async with api:
+            station = await api.get_station(station_id)
+
+        return station.dict()
+
+    except StationNotFound as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Error fetching station details: {e}"
+        ) from e
 
 
 @router.get("/streamflow/{site_no}")
